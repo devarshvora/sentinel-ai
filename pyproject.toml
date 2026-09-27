@@ -1,7 +1,7 @@
 [project]
-name = "rag-production-app"
+name = "sentinel-ai"
 version = "0.1.0"
-description = "Add your description here"
+description = "A multimodal, explainable scam investigation system"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
@@ -13,8 +13,10 @@ dependencies = [
     "llama-index-llms-google-genai>=0.9.5",
     "llama-index-readers-file>=0.6.0",
     "openai>=2.48.0",
+    "psycopg[binary]>=3.3.4",
     "python-dotenv>=1.2.2",
     "qdrant-client>=1.18.0",
     "streamlit>=1.59.0",
+    "supabase>=2.31.0",
     "uvicorn>=0.50.2",
 ]

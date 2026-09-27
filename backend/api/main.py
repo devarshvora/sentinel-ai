@@ -10,19 +10,26 @@ from fastapi import FastAPI
 from google import genai
 from google.genai import types
 
+from backend.api.investigations import (
+    router as investigations_router,
+)
+from backend.database.qdrant import QdrantStorage
+from backend.investigation.engine import investigate_content
 from backend.investigation.models import (
     RAGChunkAndSrc,
     RAGQueryResult,
     RAGSearchResult,
     RAGUpsertResult,
 )
-from backend.utils.data_loader import EMBED_DIM, embed_texts, load_and_chunk_pdf
-from backend.investigation.engine import investigate_content
 from backend.investigation.types import (
     InvestigationRequest,
     InvestigationResult,
 )
-from backend.database.qdrant import QdrantStorage
+from backend.utils.data_loader import (
+    EMBED_DIM,
+    embed_texts,
+    load_and_chunk_pdf,
+)
 
 
 load_dotenv()
@@ -34,10 +41,16 @@ if not gemini_api_key:
         "GEMINI_API_KEY is missing. Add it to your .env file."
     )
 
-gemini_client = genai.Client(api_key=gemini_api_key)
+gemini_client = genai.Client(
+    api_key=gemini_api_key
+)
 
 GENERATION_MODEL = "gemini-flash-latest"
 
+
+# ---------------------------------------------------------
+# Inngest configuration
+# ---------------------------------------------------------
 
 inngest_client = inngest.Inngest(
     app_id="sentinel_ai",
@@ -46,6 +59,10 @@ inngest_client = inngest.Inngest(
     serializer=inngest.PydanticSerializer(),
 )
 
+
+# ---------------------------------------------------------
+# Existing RAG PDF ingestion workflow
+# ---------------------------------------------------------
 
 @inngest_client.create_function(
     fn_id="RAG: Ingest PDF",
@@ -66,7 +83,9 @@ async def rag_ingest_pdf(
     ctx: inngest.Context,
 ) -> dict:
     def _load() -> RAGChunkAndSrc:
-        pdf_path = ctx.event.data.get("pdf_path")
+        pdf_path = ctx.event.data.get(
+            "pdf_path"
+        )
 
         if not pdf_path:
             raise ValueError(
@@ -85,14 +104,20 @@ async def rag_ingest_pdf(
                 "source_id cannot be empty."
             )
 
-        chunks = load_and_chunk_pdf(pdf_path)
+        chunks = load_and_chunk_pdf(
+            pdf_path
+        )
 
         print(f"PDF PATH: {pdf_path}")
         print(f"SOURCE ID: {source_id}")
         print(f"TOTAL CHUNKS: {len(chunks)}")
 
-        for index, chunk in enumerate(chunks):
-            print(f"\n--- CHUNK {index + 1} ---")
+        for index, chunk in enumerate(
+            chunks
+        ):
+            print(
+                f"\n--- CHUNK {index + 1} ---"
+            )
             print(chunk[:500])
 
         return RAGChunkAndSrc(
@@ -104,7 +129,9 @@ async def rag_ingest_pdf(
         chunks_and_source: RAGChunkAndSrc,
     ) -> RAGUpsertResult:
         chunks = chunks_and_source.chunks
-        source_id = chunks_and_source.source_id
+        source_id = (
+            chunks_and_source.source_id
+        )
 
         if not source_id:
             raise ValueError(
@@ -129,10 +156,14 @@ async def rag_ingest_pdf(
                 "text": chunk,
                 "chunk_index": index,
             }
-            for index, chunk in enumerate(chunks)
+            for index, chunk in enumerate(
+                chunks
+            )
         ]
 
-        store = QdrantStorage(dim=EMBED_DIM)
+        store = QdrantStorage(
+            dim=EMBED_DIM
+        )
 
         store.upsert(
             ids=ids,
@@ -144,20 +175,30 @@ async def rag_ingest_pdf(
             ingested=len(chunks)
         )
 
-    chunks_and_source = await ctx.step.run(
-        "load-and-chunk",
-        _load,
-        output_type=RAGChunkAndSrc,
+    chunks_and_source = (
+        await ctx.step.run(
+            "load-and-chunk",
+            _load,
+            output_type=RAGChunkAndSrc,
+        )
     )
 
-    ingestion_result = await ctx.step.run(
-        "embed-and-upsert",
-        lambda: _upsert(chunks_and_source),
-        output_type=RAGUpsertResult,
+    ingestion_result = (
+        await ctx.step.run(
+            "embed-and-upsert",
+            lambda: _upsert(
+                chunks_and_source
+            ),
+            output_type=RAGUpsertResult,
+        )
     )
 
     return ingestion_result.model_dump()
 
+
+# ---------------------------------------------------------
+# Existing RAG PDF query workflow
+# ---------------------------------------------------------
 
 @inngest_client.create_function(
     fn_id="RAG: Query PDF",
@@ -173,7 +214,9 @@ async def rag_query_pdf_ai(
         top_k: int,
         source_id: str,
     ) -> RAGSearchResult:
-        query_vectors = embed_texts([question])
+        query_vectors = embed_texts(
+            [question]
+        )
 
         if not query_vectors:
             raise RuntimeError(
@@ -182,7 +225,9 @@ async def rag_query_pdf_ai(
 
         query_vector = query_vectors[0]
 
-        store = QdrantStorage(dim=EMBED_DIM)
+        store = QdrantStorage(
+            dim=EMBED_DIM
+        )
 
         found = store.search(
             query_vector=query_vector,
@@ -200,34 +245,39 @@ async def rag_query_pdf_ai(
         search_result: RAGSearchResult,
     ) -> str:
         context_block = "\n\n".join(
-            f"[Context {index + 1}]\n{context}"
+            (
+                f"[Context {index + 1}]\n"
+                f"{context}"
+            )
             for index, context in enumerate(
                 search_result.contexts
             )
         )
 
         prompt = (
-            "Answer the user's question using only the provided "
-            "document context.\n\n"
-            "If the answer is not present in the context, say: "
-            "\"I could not find that information in the uploaded "
-            "document.\"\n\n"
+            "Answer the user's question using only the "
+            "provided document context.\n\n"
+            "If the answer is not present in the context, "
+            "say: \"I could not find that information in "
+            "the uploaded document.\"\n\n"
             f"Document context:\n{context_block}\n\n"
             f"Question: {question}"
         )
 
-        response = gemini_client.models.generate_content(
-            model=GENERATION_MODEL,
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                system_instruction=(
-                    "You are a document question-answering assistant. "
-                    "Use only the supplied document context and do not "
-                    "invent information."
+        response = (
+            gemini_client.models.generate_content(
+                model=GENERATION_MODEL,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    system_instruction=(
+                        "You are a document question-answering "
+                        "assistant. Use only the supplied document "
+                        "context and do not invent information."
+                    ),
+                    temperature=0.2,
+                    max_output_tokens=1024,
                 ),
-                temperature=0.2,
-                max_output_tokens=1024,
-            ),
+            )
         )
 
         answer = response.text
@@ -239,7 +289,9 @@ async def rag_query_pdf_ai(
 
         return answer.strip()
 
-    question = ctx.event.data.get("question")
+    question = ctx.event.data.get(
+        "question"
+    )
 
     if not question:
         raise ValueError(
@@ -253,7 +305,9 @@ async def rag_query_pdf_ai(
             "The question cannot be empty."
         )
 
-    source_id = ctx.event.data.get("source_id")
+    source_id = ctx.event.data.get(
+        "source_id"
+    )
 
     if not source_id:
         raise ValueError(
@@ -269,7 +323,10 @@ async def rag_query_pdf_ai(
 
     try:
         top_k = int(
-            ctx.event.data.get("top_k", 5)
+            ctx.event.data.get(
+                "top_k",
+                5,
+            )
         )
     except (TypeError, ValueError) as error:
         raise ValueError(
@@ -314,11 +371,17 @@ async def rag_query_pdf_ai(
     result = RAGQueryResult(
         answer=answer,
         sources=found.sources,
-        num_contexts=len(found.contexts),
+        num_contexts=len(
+            found.contexts
+        ),
     )
 
     return result.model_dump()
 
+
+# ---------------------------------------------------------
+# Sentinel structured investigation workflow
+# ---------------------------------------------------------
 
 @inngest_client.create_function(
     fn_id="Sentinel: Investigate Content",
@@ -332,7 +395,9 @@ async def sentinel_investigate(
     def _investigate() -> InvestigationResult:
         event_data = ctx.event.data
 
-        content = event_data.get("content")
+        content = event_data.get(
+            "content"
+        )
 
         if not content:
             raise ValueError(
@@ -368,7 +433,10 @@ async def sentinel_investigate(
             {},
         )
 
-        if not isinstance(follow_up_answers, dict):
+        if not isinstance(
+            follow_up_answers,
+            dict,
+        ):
             raise ValueError(
                 "follow_up_answers must be a JSON object."
             )
@@ -382,7 +450,9 @@ async def sentinel_investigate(
             follow_up_answers=follow_up_answers,
         )
 
-        return investigate_content(request)
+        return investigate_content(
+            request
+        )
 
     result = await ctx.step.run(
         "structured-investigation",
@@ -393,30 +463,58 @@ async def sentinel_investigate(
     return result.model_dump()
 
 
+# ---------------------------------------------------------
+# FastAPI application
+# ---------------------------------------------------------
+
 app = FastAPI(
     title="Sentinel AI",
     description=(
-        "Agentic digital-safety investigation and "
-        "document intelligence application."
+        "AI-powered digital safety investigation platform "
+        "for analyzing suspicious messages, scams, phishing, "
+        "job offers, and online fraud."
     ),
-    version="1.0.0",
+    version="2.0.0",
 )
 
 
-@app.get("/")
+# Register REST API routes.
+#
+# This adds:
+# POST /api/investigations
+# GET  /api/investigations
+# GET  /api/investigations/{investigation_id}
+app.include_router(
+    investigations_router
+)
+
+
+@app.get(
+    "/",
+    tags=["System"],
+)
 def root() -> dict[str, str]:
     return {
         "status": "running",
         "application": "Sentinel AI",
+        "version": "2.0.0",
     }
 
 
-@app.get("/health")
+@app.get(
+    "/health",
+    tags=["System"],
+)
 def health() -> dict[str, str]:
     return {
         "status": "healthy",
+        "api": "connected",
     }
 
+
+# ---------------------------------------------------------
+# Register Inngest workflows with FastAPI
+# ---------------------------------------------------------
 
 inngest.fast_api.serve(
     app,

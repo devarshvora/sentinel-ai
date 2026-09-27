@@ -12,7 +12,9 @@ from backend.investigation.types import (
     InvestigationRequest,
     InvestigationResult,
     RiskLevel,
+    ModelInvestigationResult,
 )
+from backend.investigation.enrichment import enrich_report
 
 
 load_dotenv()
@@ -218,7 +220,7 @@ def investigate_content(
         config=types.GenerateContentConfig(
             system_instruction=SYSTEM_INSTRUCTION,
             response_mime_type="application/json",
-            response_schema=InvestigationResult,
+            response_schema=ModelInvestigationResult,
             temperature=0.2,
             max_output_tokens=8192,
         ),
@@ -239,7 +241,9 @@ def investigate_content(
             "the InvestigationResult schema."
         ) from error
 
-    return normalize_result(
+    result = normalize_result(
         result=result,
         expected_case_id=case_id,
     )
+    raw = result.model_dump(exclude={"risk_assessment"})
+    return InvestigationResult.model_validate(enrich_report(raw, request.content, request.follow_up_answers, request.claimed_company))

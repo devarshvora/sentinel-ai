@@ -2,6 +2,10 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from backend.investigation.attack_chain import ChainStage
+from backend.investigation.risk_engine import RiskAssessment
+from backend.investigation.simulator import Simulation
+
 
 RiskLevel = Literal[
     "low",
@@ -96,7 +100,17 @@ class InvestigationRequest(BaseModel):
     )
 
 
-class InvestigationResult(BaseModel):
+class ExtractedEntities(BaseModel):
+    urls: list[str] = Field(default_factory=list)
+    emails: list[str] = Field(default_factory=list)
+    phone_numbers: list[str] = Field(default_factory=list)
+    companies: list[str] = Field(default_factory=list)
+    people: list[str] = Field(default_factory=list)
+    payment_methods: list[str] = Field(default_factory=list)
+
+
+class ModelInvestigationResult(BaseModel):
+    entities: ExtractedEntities = Field(default_factory=ExtractedEntities)
     case_id: str
     risk_score: int = Field(
         ge=0,
@@ -129,3 +143,19 @@ class InvestigationResult(BaseModel):
         default_factory=list
     )
     threat_fingerprint: ThreatFingerprint
+
+
+# Keep deterministic fields out of Gemini's response schema.
+
+
+class InvestigationResult(ModelInvestigationResult):
+    entities: dict[str, list[str]] = Field(default_factory=dict)
+    risk_assessment: RiskAssessment | None = None
+    verdict: str | None = None
+    attack_chain: list[ChainStage] = Field(default_factory=list)
+    current_stage: str = "unknown"
+    current_stage_explanation: str = "Interaction history is incomplete."
+    likely_next_step: str | None = None
+    user_actions: dict[str, bool | None] = Field(default_factory=dict)
+    simulations: list[Simulation] = Field(default_factory=list)
+    safety_playbook: list[dict[str, str]] = Field(default_factory=list)
